@@ -3,10 +3,6 @@ package com.springbatch.config;
 
 import com.springbatch.model.User;
 import lombok.RequiredArgsConstructor;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
 import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing;
@@ -14,23 +10,25 @@ import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
-import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
 import org.springframework.batch.item.database.JdbcCursorItemReader;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder;
 import org.springframework.batch.item.file.FlatFileItemReader;
+import org.springframework.batch.item.file.FlatFileItemWriter;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.item.file.mapping.BeanWrapperFieldSetMapper;
+import org.springframework.batch.item.file.transform.BeanWrapperFieldExtractor;
+import org.springframework.batch.item.file.transform.DelimitedLineAggregator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
-import java.io.FileOutputStream;
 
 @Configuration
 @EnableBatchProcessing
@@ -38,7 +36,8 @@ import java.io.FileOutputStream;
 public class BatchConfig {
     @Autowired
     private JobRepository jobRepository;
-
+    @Autowired
+    private StepLoggerListener stepLoggerListener;  // Listener injection
     @Autowired
     private PlatformTransactionManager transactionManager;
     @Autowired
@@ -54,7 +53,7 @@ public class BatchConfig {
                 .build();
     }
 
-    // 2. WRITE DATA TO EXCLEL SHEET
+  /*  // 2. WRITE DATA TO EXCLEL SHEET
     @Bean
     public ItemWriter<User> writer() {
         return users -> {
@@ -78,6 +77,22 @@ public class BatchConfig {
                 }
             }
         };
+    }*/
+    //2. WRITE DATA TO CSV
+    @Bean
+    public FlatFileItemWriter<User> writer() {
+        FlatFileItemWriter<User> writer = new FlatFileItemWriter<>();
+        writer.setResource(new FileSystemResource("C:\\git\\users.txt"));
+        writer.setEncoding("UTF-8");
+        writer.setAppendAllowed(Boolean.FALSE);
+        writer.setLineAggregator(new DelimitedLineAggregator<User>() {{
+            setDelimiter(",");
+            setFieldExtractor(new BeanWrapperFieldExtractor<User>() {{
+                setNames(new String[] { "id", "name", "email" });
+            }});
+        }});
+
+        return writer;
     }
 
     // 3. READ DATA AND WRITE DATA TO SHEET
@@ -87,6 +102,7 @@ public class BatchConfig {
                 .<User, User>chunk(5, transactionManager)
                 .reader(reader())   // Read from database
                 .writer(writer())   // Write to Excel file
+                .listener(stepLoggerListener)
                 .build();
     }
 
@@ -111,6 +127,7 @@ public class BatchConfig {
                 }})
                 .linesToSkip(1) // Skip header
                 .build();
+
     }
     // 2. JDBC Writer
     @Bean
@@ -128,6 +145,7 @@ public class BatchConfig {
                 .<User, User>chunk(5, transactionManager)
                 .reader(csvReader())
                 .writer(jdbcWriter())
+                .listener(stepLoggerListener)
                 .build();
     }
 
@@ -141,11 +159,14 @@ public class BatchConfig {
     }
 
     @Bean
-    public Job fullJob() {
+    public Job fullJob(JobCompletationNotificationListener listener) {
         return new JobBuilder("fullJob", jobRepository)
                 .incrementer(new RunIdIncrementer())
+                .listener(listener) // ✅ Listener added
                 .start(importsUsersCSVToDatabase())        // Step 1: CSV to DB
-                .next(exportUsersToExcelStep())           // Step 2: DB to Excel
+                .next(exportUsersToExcelStep())
+
+                // Step 2: DB to Excel
                 .build();
     }
 }
